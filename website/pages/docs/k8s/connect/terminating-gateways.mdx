@@ -74,7 +74,7 @@ $ kubectl port-foward <consul-release>-server-0 8500 &
 
 ```shell-session
 $ export CONSUL_HTTP_ADDR=https://localhost:8501
-$ export CONSUL_HTTP_TOKEN=$(kubectl get secret <consul-release>--acl-bootstrap-token -o jsonpath={.data.token} | base64 -D)
+$ export CONSUL_HTTP_TOKEN=$(kubectl get secret <consul-release>-bootstrap-acl-token -o jsonpath={.data.token} | base64 -D)
 $ export CONSUL_HTTP_SSL_VERIFY=false
 ```
 
@@ -90,7 +90,7 @@ Registering the external services with Consul is a multi-step process which invo
 ### Register external services with Consul
 Next create a sample external service and register it with Consul.
 ```shell-session
-$ cat > external2.json <<EOF
+$ cat > external.json <<EOF
 {
    "Node": "legacy_node",
    "Address": "example.com",
@@ -99,9 +99,9 @@ $ cat > external2.json <<EOF
      "external-probe": "true"
    },
    "Service": {
-     "ID": "example",
-     "Service": "example",
-     "Port": 80
+     "ID": "example-https",
+     "Service": "example-https",
+     "Port": 443
    }
 }
 EOF
@@ -109,7 +109,11 @@ EOF
 
 Next register the external service with Consul:
 ```shell-session
-curl --request PUT --data @external2.json -k http://localhost:8500/v1/catalog/register
+curl --request PUT --data @external.json -k http://localhost:8500/v1/catalog/register
+```
+-> If ACLs and TLS are enabled :
+```shell-session
+curl --request PUT --header "X-Consul-Token: $CONSUL_HTTP_TOKEN" --data @external.json -k https://localhost:8501/v1/catalog/register
 ```
 
 ### Update terminating ACL token (optional)
@@ -120,6 +124,20 @@ being represented by the gateway:
 * The CLI command should be run with the `-merge-policies`, `-merge-roles` and `-merge-service-identities` so
 nothing is removed from the token
 
+```shell-session
+$ cat > write-policy.hcl <<EOF
+service "example-https" {
+  policy = "write"
+}
+EOF
+```
+```shell-session
+$ consul acl policy create -name "example-https-write-policy" -rules @write-policy.hcl
+$ consul acl policy update -name terminating-gateway-terminating-gateway-token -rules @write-policy.hcl \
+-merge-policies -merge-roles -merge-service-identities
+$ consul acl policy update -name terminating-gateway-terminating-gateway-token -rules @write-policy.hcl
+```
+
 ### Create the configuration entry for the terminating gateway
 Next write the config entry for the terminating gateway:
 ```shell-session
@@ -128,11 +146,14 @@ Kind = "terminating-gateway"
 Name = "terminating-gateway"
 Services = [
  {
-   Name = "example"
+   Name = "example-https"
+   CAFile = "/etc/ssl/cert.pem"
  }
 ]
 EOF
 ```
+~> If ACLs are enabled a `CAFile` must be provided, it must point to the system trust store of the terminating gateway
+container.
 
 Submit the terminating gateway entry with the Consul cli using this command.
 
@@ -143,6 +164,9 @@ $ consul config write terminating-gateway.hcl
 
 -> If using ACLs and TLS
 Create intentions to allow access from services in the mesh to the external service
+```shell-session
+$ consul intention create -allow static-client example-https
+```
 
 ### Define the external services as upstreams for services in the mesh
 Finally define and deploy the external services as upstreams for the internal mesh services that want talk to them.
@@ -171,7 +195,7 @@ spec:
         app: static-client
       annotations:
         "consul.hashicorp.com/connect-inject": "true"
-        "consul.hashicorp.com/connect-service-upstreams": "example:1234"
+        "consul.hashicorp.com/connect-service-upstreams": "example-https:1234"
     spec:
       containers:
         # This name will be the service name in Consul.
@@ -192,5 +216,5 @@ $ kubectl apply -f static-client.yaml
 
 -> You can verify connectivity of the services via a curl command:
 ```shell-session
-$ kubectl exec static-client-7cc6df495-qdtkp -- curl -vvvs -H "Host: example.com" http://localhost:1234/
+$ kubectl exec static-client-7cc6df495-qdtkp -- curl -vvvs -H "Host: example-https.com" http://localhost:1234/
 ```
