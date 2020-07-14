@@ -124,9 +124,14 @@ service "example-https" {
 ```
 ```shell-session
 $ consul acl policy create -name "example-https-write-policy" -rules @write-policy.hcl
-$ consul acl policy update -name terminating-gateway-terminating-gateway-token -rules @write-policy.hcl \
--merge-policies -merge-roles -merge-service-identities
-$ consul acl policy update -name terminating-gateway-terminating-gateway-token -rules @write-policy.hcl
+```
+Now fetch the id of the terminating gateway token
+```shell-session
+$ consul acl token list | grep terminating-gateway-terminating-gateway-token
+```
+Update the terminating gateway acl token with the new policy
+```shell-session
+$ consul acl token update -id 47b91c22-7c85-63c0-8c95-7e484b126835 -policy-name example-https-write-policy -merge-policies -merge-roles -merge-service-identities
 ```
 
 ### Create the configuration entry for the terminating gateway
